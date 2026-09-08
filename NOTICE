@@ -1,11 +1,16 @@
 Runtime Registry
-Copyright 2026 Summon Software Labs.
 
-This product includes software developed by Summon Software Labs.
+Copyright 2026 Summon Software Labs
 
-This product is licensed under the Apache License, Version 2.0.
-See the LICENSE file for the full license text.
+Runtime Registry is an open-source, vendor-neutral runtime for runtime discovery and authority for heterogeneous AI infrastructure: what runtime services, nodes, devices, backends, protocols, and capabilities exist now.
 
-Runtime Registry is an independent, vendor-neutral implementation.
-It does not transmit telemetry; all observations, logs, benchmarks,
-and persistence are local to the host that runs it.
+This product is licensed under the Apache License, Version 2.0. See the
+LICENSE file in this distribution for the full license text.
+
+Runtime Registry does not collect or transmit any telemetry. All telemetry is
+written to local files chosen by the operator and never leaves the machine
+running the software.
+
+Runtime Registry accepts contributions from individuals and organizations on the
+terms of the Apache License 2.0 without requiring a Contributor License
+Agreement (CLA). See CONTRIBUTING.md for contribution guidance.

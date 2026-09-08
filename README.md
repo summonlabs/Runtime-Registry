@@ -272,4 +272,5 @@ No telemetry is transmitted. All observations, logs, benchmarks, and persistence
 to the host that runs it.
 
 ## License
+
 Apache License 2.0. Copyright 2026 Summon Software Labs. No telemetry transmission.
