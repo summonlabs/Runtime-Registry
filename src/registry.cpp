@@ -274,29 +274,39 @@ ServiceInstanceId Registry::register_instance(const ServiceInstance& inst, const
       ++accounting_.duplicate_conflict_rejections;
       throw RegistryError(ErrorKind::STALE_INSTANCE_GENERATION, "registration rejected because ServiceInstanceGeneration " + std::to_string(copy.instance_generation.value()) + " is stale; current " + std::to_string(current->instance_generation.value()));
     }
-    instance_history_.push_back(*current);
-    current->lifecycle = Lifecycle::SUPERSEDED;
-    if (accounting_.available_instances > 0) --accounting_.available_instances;
-    ++accounting_.supersessions;
   } else {
     if (covered_by_tombstone("ServiceId", render_typed_id(copy.service_id), copy.instance_generation.value())) {
       ++accounting_.stale_mutation_rejections;
       throw RegistryError(ErrorKind::TOMBSTONE_RESURRECTION, "instance resurrected by tombstone");
     }
   }
+  // Every endpoint is validated before any state change: a rejected
+  // registration neither supersedes the current instance nor rebinds endpoints.
   for (EndpointId eid : copy.endpoints) {
     auto eit = endpoints_.find(eid);
     if (eit == endpoints_.end()) throw RegistryError(ErrorKind::UNKNOWN_IDENTITY, "instance references unregistered endpoint");
+    const ServiceInstanceId bound = eit->second.service_instance;
+    if (bound.value() == 0 || bound == copy.instance_id) continue;
+    if (current != nullptr && bound == current->instance_id) continue;   // the instance being superseded
+    // An inactive (superseded/stale/tombstoned/retired) instance may have its
+    // endpoint reclaimed by a fresh incarnation of the same service.
+    auto owner = instances_.find(bound);
+    bool inactive = (owner == instances_.end() || owner->second.lifecycle == Lifecycle::SUPERSEDED ||
+                     owner->second.lifecycle == Lifecycle::STALE || owner->second.lifecycle == Lifecycle::TOMBSTONED ||
+                     owner->second.lifecycle == Lifecycle::RETIRED || owner->second.lifecycle == Lifecycle::INVALIDATED);
+    if (!inactive) { ++accounting_.duplicate_conflict_rejections; throw RegistryError(ErrorKind::DUPLICATE_CONFLICT, "endpoint already bound to another instance"); }
+  }
+  if (current != nullptr) {
+    instance_history_.push_back(*current);
+    current->lifecycle = Lifecycle::SUPERSEDED;
+    if (accounting_.available_instances > 0) --accounting_.available_instances;
+    ++accounting_.supersessions;
+  }
+  for (EndpointId eid : copy.endpoints) {
+    auto eit = endpoints_.find(eid);
     if (eit->second.service_instance.value() == 0) {
       eit->second.service_instance = copy.instance_id;
     } else if (eit->second.service_instance != copy.instance_id) {
-      // An inactive (superseded/stale/tombstoned/retired) instance may have its
-      // endpoint reclaimed by a fresh incarnation of the same service.
-      auto owner = instances_.find(eit->second.service_instance);
-      bool inactive = (owner == instances_.end() || owner->second.lifecycle == Lifecycle::SUPERSEDED ||
-                       owner->second.lifecycle == Lifecycle::STALE || owner->second.lifecycle == Lifecycle::TOMBSTONED ||
-                       owner->second.lifecycle == Lifecycle::RETIRED || owner->second.lifecycle == Lifecycle::INVALIDATED);
-      if (!inactive) { ++accounting_.duplicate_conflict_rejections; throw RegistryError(ErrorKind::DUPLICATE_CONFLICT, "endpoint already bound to another instance"); }
       eit->second.service_instance = copy.instance_id;
       eit->second.reachability = Reachability::REACHABLE;
       eit->second.freshness = Freshness::CURRENT;
@@ -471,11 +481,26 @@ void Registry::supersede(ServiceInstanceId old_id, const ServiceInstance& new_in
   if (!v.accept) throw RegistryError(v.kind, v.reason);
   auto it = instances_.find(old_id);
   if (it == instances_.end()) throw RegistryError(ErrorKind::UNKNOWN_IDENTITY, "no such instance");
-  instance_history_.push_back(it->second);
-  it->second.lifecycle = Lifecycle::SUPERSEDED;
-  if (accounting_.available_instances > 0) --accounting_.available_instances;
+  // The replacement is a newer generation of the same service; a stale one is
+  // rejected before any state change.
+  if (new_inst.service_id != it->second.service_id)
+    throw RegistryError(ErrorKind::DUPLICATE_CONFLICT, "replacement instance belongs to another service");
+  if (new_inst.instance_generation <= it->second.instance_generation) {
+    ++accounting_.stale_mutation_rejections;
+    throw RegistryError(ErrorKind::STALE_INSTANCE_GENERATION,
+        "supersession rejected because ServiceInstanceGeneration " + std::to_string(new_inst.instance_generation.value()) +
+        " is not newer than " + std::to_string(it->second.instance_generation.value()));
+  }
+  // Register first (it supersedes the service's current instance); the old
+  // instance is demoted only once the replacement is accepted.
   register_instance(new_inst, env);
-  ++accounting_.supersessions;
+  auto old = instances_.find(old_id);
+  if (old != instances_.end() && old->second.lifecycle != Lifecycle::SUPERSEDED) {
+    instance_history_.push_back(old->second);
+    old->second.lifecycle = Lifecycle::SUPERSEDED;
+    if (accounting_.available_instances > 0) --accounting_.available_instances;
+    ++accounting_.supersessions;
+  }
 }
 
 TombstoneId Registry::create_tombstone(const TombstoneRecord& tomb, const AuthorityEnvelope& env) {
